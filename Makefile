@@ -8,3 +8,4 @@ clean:
 
 run: kilo
 	./kilo
+
