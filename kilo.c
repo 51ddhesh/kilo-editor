@@ -1,4 +1,11 @@
-
+// kilo.c - A small, simple text editor in C
+// Inspired by kilo by Salvatore Sanfilippo (antirez)
+// This file implements a terminal-based text editor with basic features:
+// - Open, edit, and save text files
+// - Cursor movement, scrolling, and simple search
+// - Status and message bars
+// - Handles raw terminal input and escape sequences
+//
 // * INCLUDES ----------
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
@@ -18,11 +25,16 @@
 #include <unistd.h>
 
 // * DEFINES ---------
+// KILO_VERSION: Editor version string
 #define KILO_VERSION "0.0.1"
+// KILO_TAB_STOP: Number of spaces per tab
 #define KILO_TAB_STOP 8 
+// KILO_QUIT_TIMES: Times to press Ctrl-Q to quit with unsaved changes
 #define KILO_QUIT_TIMES 3
+// CTRL_KEY: Macro to get control-key value
 #define CTRL_KEY(k) ((k) & 0x1f)
 
+// editorKey: Enum for special key codes (arrows, delete, etc.)
 enum editorKey {
     BACKSPACE = 127,
     ARROW_LEFT = 1000,
@@ -37,6 +49,7 @@ enum editorKey {
 };
 
 // * DATA ----------
+// erow: Structure for a single line of text (with rendered version for tabs)
 typedef struct erow {
     int size;
     int rsize;
@@ -44,6 +57,7 @@ typedef struct erow {
     char *render;
 } erow;
 
+// editorConfig: Main editor state/configuration
 struct editorConfig {
     int cx, cy;
     int rx;
@@ -62,12 +76,14 @@ struct editorConfig {
 struct editorConfig E;
 
 // * PROTOTYPES ----------
+// Function declarations for status, screen refresh, and prompt
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 
 
 // * TERMINAL ----------
+// die: Exit with error, clear screen
 void die(const char *s) {
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1b[H", 3);
@@ -76,11 +92,13 @@ void die(const char *s) {
     exit(1);
 }
 
+// disableRawMode: Restore terminal to original mode
 void disableRawMode() {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
         die("tcsetattr");
 }
 
+// enableRawMode: Set terminal to raw mode for direct input
 void enableRawMode() {
     if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
     atexit(disableRawMode);
@@ -97,6 +115,7 @@ void enableRawMode() {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
 }
 
+// editorReadKey: Read a keypress, handle escape sequences for special keys
 int editorReadKey() {
     int nread;
     char c;
@@ -104,24 +123,28 @@ int editorReadKey() {
         if (nread == -1 && errno != EAGAIN) die("read");
     }
     if (c == '\x1b') {
+        // Handle escape sequences for special keys (arrows, home, end, etc.)
         char seq[3];
         if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
         if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
         if (seq[0] == '[') {
+            // CSI sequences: ESC [ ...
             if (seq[1] >= '0' && seq[1] <= '9') {
+                // Extended escape sequence: ESC [ <num> ~
                 if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
-                    if (seq[2] == '~') {
-                        switch (seq[1]) {
-                            case '1': return HOME_KEY;
-                            case '3': return DEL_KEY;
-                            case '4': return END_KEY;
-                            case '5': return PAGE_UP;
-                            case '6': return PAGE_DOWN;
-                            case '7': return HOME_KEY;
-                            case '8': return END_KEY;
-                        }
+                if (seq[2] == '~') {
+                    switch (seq[1]) {
+                        case '1': return HOME_KEY;
+                        case '3': return DEL_KEY;
+                        case '4': return END_KEY;
+                        case '5': return PAGE_UP;
+                        case '6': return PAGE_DOWN;
+                        case '7': return HOME_KEY;
+                        case '8': return END_KEY;
                     }
+                }
             } else {
+                // Simple arrow/home/end: ESC [ A/B/C/D/H/F
                 switch (seq[1]) {
                     case 'A': return ARROW_UP;
                     case 'B': return ARROW_DOWN;
@@ -132,39 +155,43 @@ int editorReadKey() {
                 }
             }
         } else if (seq[0] == 'O') {
+            // ESC O H/F (alternative home/end)
             switch (seq[1]) {
                 case 'H': return HOME_KEY;
                 case 'F': return END_KEY;
             }
         }
-        return '\x1b';
+        return '\x1b'; // Unrecognized escape sequence
     } else {
-        return c;
+        return c; // Normal character
     }
 }
 
+// getCursorPosition: Query terminal for cursor position
 int getCursorPosition(int *rows, int *cols) {
     char buf[32];
     unsigned int i = 0;
-    
+    // Request cursor position report
     if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
-    
+    // Read response: ESC [ rows ; cols R
     while (i < sizeof(buf) - 1) {
         if (read(STDIN_FILENO, &buf[i], 1) != 1) break;
         if (buf[i] == 'R') break;
         i++;
     }
     buf[i] = '\0';
-    
+    // Parse response
     if (buf[0] != '\x1b' || buf[1] != '[') return -1;
     if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
-    
     return 0;
 }
 
+// getWindowSize: Get terminal window size (rows, cols)
 int getWindowSize(int *rows, int *cols) {
     struct winsize ws;
+    // Try ioctl first
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+        // Fallback: move cursor to bottom-right and query position
         if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1;
         return getCursorPosition(rows, cols);
     } else {
@@ -175,6 +202,7 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 // * ROW OPERATIONS ----------
+// Functions to manipulate lines (rows): insert, delete, update, etc.
 
 int editorRowRxToCx(erow *row, int rx) {
     int current_rx = 0;
@@ -198,16 +226,20 @@ int editorRowCxToRx(erow *row, int cx) {
     return rx;
 }
 
+// editorUpdateRow: Update the rendered version of a row (expand tabs)
 void editorUpdateRow(erow *row) {
     int tabs = 0;
+    // Count number of tabs in the row
     for (int i = 0; i < row -> size; i++) {
         if (row -> chars[i] == '\t') tabs++;
     }
+    // Allocate enough space for expanded tabs
     free(row -> render);
     row -> render = malloc(row -> size + (tabs * (KILO_TAB_STOP - 1)) + 1);
     int idx = 0;
     for (int i = 0; i < row -> size; i++) {
         if (row -> chars[i] == '\t') {
+            // Insert a space, then pad with spaces to next tab stop
             row -> render[idx++] = ' ';
             while (idx % KILO_TAB_STOP != 0) row -> render[idx++] = ' ';
         } else {
@@ -218,10 +250,13 @@ void editorUpdateRow(erow *row) {
     row -> rsize = idx;
 }
 
+// editorInsertRow: Insert a new row at position 'at'
 void editorInsertRow(int at, char *s, size_t len) {
     if (at < 0 || at > E.numrows) return;
+    // Make space for new row
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
     memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
+    // Initialize new row
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
@@ -238,9 +273,12 @@ void editorFreeRow(erow *row) {
     free(row -> chars);
 }
 
+// editorDelRow: Delete a row at position 'at'
 void editorDelRow(int at) {
     if (at < 0 || at >= E.numrows) return;
+    // Free memory for row
     editorFreeRow(&E.row[at]);
+    // Shift rows up
     memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
     E.numrows--;
     E.dirty_flag++;
@@ -274,6 +312,7 @@ void editorRowDelChar(erow *row, int at) {
 }
 
 // * EDITOR OPERATIONS ----------
+// Functions for editing: insert char, new line, delete char
 
 void editorInsertChar(int c) {
     if (E.cy == E.numrows) {
@@ -313,8 +352,8 @@ void editorDelChar() {
     }
 }
 
-
 // * FILE I/O ----------
+// Functions to load and save files
 
 char *editorRowsToString(int *buflen) {
     int total_len = 0;
@@ -380,10 +419,12 @@ void editorSave() {
 }
 
 // * FIND ----------
+// Simple search functionality with callback for interactive search
+
 void editorFindCallback(char *query, int key) {
     static int last_match = -1;
     static int direction = 1;
-    
+    // Handle navigation keys and reset on new search
     if (key == '\r' || key == '\x1b') {
         last_match = -1;
         direction = 1;
@@ -398,15 +439,15 @@ void editorFindCallback(char *query, int key) {
     }
     if (last_match == -1) direction = 1;
     int current = last_match;
-
+    // Search through all rows in the given direction
     for (int i = 0; i < E.numrows; i++) {
         current += direction;
         if (current == -1) current = E.numrows - 1;
         else if (current == E.numrows) current = 0;
-
         erow *row = &E.row[current];
         char *match = strstr(row -> render, query);
         if (match) {
+            // Found a match: update cursor and state
             last_match = current;
             E.cy = current;
             E.cx = editorRowRxToCx(row, match - row -> render);
@@ -433,12 +474,14 @@ void editorFind() {
 }
 
 // * APPEND BUFFER ----------
+// abuf: Dynamic string buffer for efficient screen drawing
 struct abuf {
     char *b;
     int len;
 };
 #define ABUF_INIT {NULL, 0}
 
+// abAppend: Append string to abuf
 void abAppend(struct abuf *ab, const char *s, int len) {
     char *new = realloc(ab->b, ab->len + len);
     if (new == NULL) return;
@@ -446,11 +489,13 @@ void abAppend(struct abuf *ab, const char *s, int len) {
     ab->b = new;
     ab->len += len;
 }
+// abFree: Free abuf memory
 void abFree(struct abuf *ab) {
     free(ab->b);
 }
 
 // * OUTPUT ----------
+// Functions to draw rows, status bar, message bar, and refresh the screen
 
 void editorScroll() {
     E.rx = 0;
@@ -566,6 +611,9 @@ void editorSetStatusMessage(const char* fmt, ...) {
 
 
 // * INPUT ----------
+// editorPrompt: Prompt user for input (used for save-as, search, etc.)
+// editorMoveCursor: Handle cursor movement for arrow keys
+// editorProcessKeypress: Main input handler (dispatches on key pressed)
 
 char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
     size_t bufsize = 128;
@@ -578,20 +626,24 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
         editorRefreshScreen();
 
         int c = editorReadKey();
+        // Handle backspace/delete
         if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
             if (buflen != 0) buf[--buflen] = '\0';
         } else if (c == '\x1b') {
+            // Cancel input
             editorSetStatusMessage("");
             if (callback) callback(buf, c);
             free(buf);
             return NULL;
         } else if (c == '\r') {
+            // Enter: accept input if not empty
             if (buflen != 0) {
                 editorSetStatusMessage("");
                 if (callback) callback(buf, c);
                 return buf;
             }
         } else if (!iscntrl(c) && c < 128) {
+            // Append normal character
             if (buflen == bufsize - 1) {
                 bufsize *= 2;
                 buf = realloc(buf, bufsize);
@@ -716,7 +768,10 @@ void editorProcessKeypress() {
     quit_times = KILO_QUIT_TIMES;
 }
 
-// * INIT ---------- 
+// * INIT ----------
+// initEditor: Initialize editor state
+// main: Entry point, main loop
+
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
