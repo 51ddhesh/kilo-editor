@@ -57,5 +57,10 @@ dkms.conf
 
 # Executable kilo
 kilo
+
+# Test files
+*.cpp
+*.cc
+*.hpp
 # End of https://www.toptal.com/developers/gitignore/api/c
 
