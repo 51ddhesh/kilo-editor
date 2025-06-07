@@ -77,7 +77,7 @@ Build the editor:
 ```bash
 make
 ```
-Building without make, c23 can be replaced with your version of C
+Building without make, C23 can be replaced with your version of C
 ```bash
 cc kilo.c -o kilo -Wall -Wextra -pedantic -std=c23
 ```
