@@ -1,5 +1,6 @@
 // kilo.c - A small, simple text editor in C
 // Inspired by kilo by Salvatore Sanfilippo (antirez)
+// Follows the tutorial by Jeremy Ruten (snaptoken)
 // This file implements a terminal-based text editor with basic features:
 // - Open, edit, and save text files
 // - Cursor movement, scrolling, and simple search
