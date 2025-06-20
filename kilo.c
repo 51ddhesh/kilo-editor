@@ -2,11 +2,7 @@
 // Inspired by kilo by Salvatore Sanfilippo (antirez)
 // Follows the tutorial by Jeremy Ruten (snaptoken)
 // This file implements a terminal-based text editor with basic features:
-// - Open, edit, and save text files
-// - Cursor movement, scrolling, and simple search
-// - Status and message bars
-// - Handles raw terminal input and escape sequences
-//
+
 // * INCLUDES ----------
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
